@@ -1,0 +1,743 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AWS
+
+  Sample SAM Template for AWS
+
+Parameters:
+  # The name of the rest api
+  RestApiName:
+    Type: String
+    Default: 'employees-restapi'
+    Description: The name of the rest api
+
+  # the name of the rest api stage
+  RestApiStageName:
+    Type: String
+    Default: 'prod'
+    Description: The name of the rest api stage
+
+  # The name of the DynamoDB table
+  TableName:
+    Type: String
+    Default: 'employees-table'
+    Description: The name of the DynamoDB table
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  #
+  # Table
+  #
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      AttributeDefinitions:
+        - AttributeName: 'pkey'
+          AttributeType: 'S'
+        - AttributeName: 'skey'
+          AttributeType: 'S'
+        - AttributeName: 'parent_group_id'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'pkey'
+          KeyType: 'HASH'
+        - AttributeName: 'skey'
+          KeyType: 'RANGE'
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      GlobalSecondaryIndexes:
+        - IndexName: 'gsi-0'
+          KeySchema:
+            - AttributeName: 'skey'
+              KeyType: 'HASH'
+            - AttributeName: 'pkey'
+              KeyType: 'RANGE'
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+        - IndexName: 'gsi-1'
+          KeySchema:
+            - AttributeName: 'parent_group_id'
+              KeyType: 'HASH'
+            - AttributeName: 'pkey'
+              KeyType: 'RANGE'
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  # Stream Processing Function
+  TableStreamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/table/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        # @link https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#dynamodb
+        TableStreamEvent:
+          Type: DynamoDB # More info about DynamoDB Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#dynamodb
+          Properties:
+            Stream:
+              !GetAtt Table.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 10
+            Enabled: true
+            MaximumBatchingWindowInSeconds: 10
+            BisectBatchOnFunctionError: true
+            MaximumRecordAgeInSeconds: 86400
+            ParallelizationFactor: 8
+            MaximumRetryAttempts: 100
+#            DestinationConfig:
+#              OnFailure:
+#                Destination: arn:aws:sqs:us-west-2:012345678901:my-queue
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # RestApi
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Ref RestApiName
+      StageName: !Ref RestApiStageName
+      OpenApiVersion: '3.0.1'
+      EndpointConfiguration: REGIONAL
+      Cors:
+        AllowMethods: "'OPTIONS,HEAD,GET,PUT,POST,DELETE'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: NONE
+
+  ##
+  ## ACTIVITIES
+  ##
+
+  # Activities [GET]
+  ActivitiesCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/activities_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        ActivitiesCGet:
+          Type: Api
+          Properties:
+            Path: /activities
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Activities [POST]
+  ActivitiesPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/activities_post/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        ActivitiesPost:
+          Type: Api
+          Properties:
+            Path: /activities
+            Method: post
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## ACTIVITY
+  ##
+
+  # Activity [GET]
+  ActivityGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/activity_get/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        ActivityDelete:
+          Type: Api
+          Properties:
+            Path: /activities/{activity_id}
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Activity [PUT]
+  ActivityPutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/activity_put/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        ActivityPut:
+          Type: Api
+          Properties:
+            Path: /activities/{activity_id}
+            Method: put
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Activity [DELETE]
+  # @todo - to implement
+  ActivityDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/activity_delete/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        ActivityDelete:
+          Type: Api
+          Properties:
+            Path: /activities/{activity_id}
+            Method: delete
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## EMPLOYEES
+  ##
+
+  # Employees [GET]
+  EmployeesCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employees_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeesCGet:
+          Type: Api
+          Properties:
+            Path: /employees
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employees [POST]
+  EmployeesPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employees_post/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeesPost:
+          Type: Api
+          Properties:
+            Path: /employees
+            Method: post
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## EMPLOYEE
+  ##
+
+  # Employee [GET]
+  EmployeeGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_get/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeGet:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employee [PUT]
+  EmployeePutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_put/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeePut:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}
+            Method: put
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employee [DELETE]
+  EmployeeDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_delete/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeDelete:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}
+            Method: delete
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## EMPLOYEE - TIMESHEETS
+  ##
+
+  # Employee - Timesheets [CGET]
+  # @todo - implement activity handling
+  EmployeeTimesheetsCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_timesheets_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeTimesheetsCGet:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/timesheets
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## EMPLOYEE - TIMESHEET
+  ##
+
+  # Employee - Timesheet [GET]
+  # @todo - implement activity handling
+  EmployeeTimesheetGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_timesheet_get/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeTimesheetGet:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/timesheets/{date}
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## EMPLOYEE - TIMESHEET - ENTRIES
+  ##
+
+  # Employee - Timesheet - Entries [GET]
+  EmployeeTimesheetEntriesCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_timesheet_entries_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeTimesheetEntriesCGet:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/timesheets/{date}/entries
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employee - Timesheet - Entries [POST]
+  EmployeeTimesheetEntriesPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_timesheet_entries_post/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeTimesheetEntriesPost:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/timesheets/{date}/entries
+            Method: post
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employee - Timesheet - Entry [GET]
+  EmployeeTimesheetEntryGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_timesheet_entry_get/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeTimesheetEntryGet:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/timesheets/{date}/entries/{time}
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employee - Timesheet - Entry [DELETE]
+  EmployeeTimesheetEntryDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_timesheet_entry_delete/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeTimesheetEntryDelete:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/timesheets/{date}/entries/{time}
+            Method: delete
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## EMPLOYEE - CONTRACTS
+  ##
+
+  # Employee - Contracts [GET]
+  EmployeeContractsCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_contracts_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeContractsCGet:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/contracts
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employee - Contracts [POST]
+  EmployeeContractsPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_contracts_post/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeContractsPost:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/contracts
+            Method: post
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## EMPLOYEE - CONTRACT
+  ##
+
+  # Employee - Contract [GET]
+  EmployeeContractGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_contract_get/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeContractGet:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/contracts/{start_date}
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Employee - Contracts [PUT]
+  EmployeeContractPutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_contract_put/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeContractDelete:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/contracts/{start_date}
+            Method: put
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+
+  # Employee - Contracts [DELETE]
+  EmployeeContractDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/employee_contract_delete/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        EmployeeContractDelete:
+          Type: Api
+          Properties:
+            Path: /employees/{employee_id}/contracts/{start_date}
+            Method: delete
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## GROUPS
+  ##
+
+  # Groups [GET]
+  GroupsCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/groups_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        GroupsCGet:
+          Type: Api
+          Properties:
+            Path: /groups
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Groups [POST]
+  GroupsPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/groups_post/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        GroupsPost:
+          Type: Api
+          Properties:
+            Path: /groups
+            Method: post
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  ##
+  ## GROUP
+  ##
+
+  # Group [GET]
+  GroupGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/group_get/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        GroupGet:
+          Type: Api
+          Properties:
+            Path: /groups/{group_id}
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Group [DELETE]
+  # @todo - implement business logic
+  GroupDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/group_delete/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        GroupDelete:
+          Type: Api
+          Properties:
+            Path: /groups/{group_id}
+            Method: delete
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Group - Groups [GET]
+  GroupGroupsCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/group_groups_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        GroupGroupsCGet:
+          Type: Api
+          Properties:
+            Path: /groups/{group_id}/groups
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  # Group - Employees [GET]
+  GroupEmployeesCGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/group_employees_cget/python
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Events:
+        GroupEmployeesCGet:
+          Type: Api
+          Properties:
+            Path: /groups/{group_id}/employees
+            Method: get
+            RestApiId: !Ref RestApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
